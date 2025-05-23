@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My 3D Panorama</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            cursor: grab; /* Indicate draggable */
+        }
+        canvas {
+            display: block;
+        }
+        /* FPS counter style */
+        #fps {
+            position: absolute;
+            top: 5px;
+            right: 5px; /* Position on the right */
+            background-color: transparent; /* Transparent background */
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 19px; /* Bigger font size */
+            z-index: 5; /* Ensure it's above the canvas */
+            /* Removed padding and border-radius for a "no dot" look */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="fps">FPS: --</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let panoramaSphere;
+        let lastTime = 0;
+        const fpsDiv = document.getElementById('fps');
+
+        // Rotation settings
+        const INTRO_ROTATION_DURATION = 5000; // 5 seconds of initial rotation
+        const FALLOFF_DURATION = 1500;        // 1.5 seconds for the rotation to smoothly stop
+        let initialAutoRotateSpeed = 1.0;      // Initial rotation speed (adjust as needed)
+
+        // Falloff state variables
+        let isFallingOff = false;
+        let falloffStartTime = 0;
+
+        function init() {
+            // 1. Scene
+            scene = new THREE.Scene();
+
+            // 2. Camera
+            camera = new THREE.PerspectiveCamera(
+                75, // Field of View
+                window.innerWidth / window.innerHeight, // Aspect Ratio
+                0.1, // Near clipping plane
+                1000 // Far clipping plane
+            );
+            camera.position.set(0, 0, 0.1); // Position camera slightly inside sphere
+
+            // 3. Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio); // Render at native screen resolution
+            document.body.appendChild(renderer.domElement);
+
+            // 4. Panorama Image
+            // !!! IMPORTANT: REPLACE THIS WITH THE PATH TO YOUR PANORAMA IMAGE !!!
+            // For faster loading, ensure 'pano.jpg' is highly optimized (compressed)
+            const panoramaImageURL = 'pano2.jpg'; // <--- CHANGE THIS!
+
+            const textureLoader = new THREE.TextureLoader();
+            const panoramaTexture = textureLoader.load(
+                panoramaImageURL,
+                () => { // Called when texture is loaded
+                    console.log("Panorama texture loaded!");
+                    // Quality improvements (already good)
+                    panoramaTexture.minFilter = THREE.LinearMipmapLinearFilter;
+                    panoramaTexture.magFilter = THREE.LinearFilter;
+                    panoramaTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+                    panoramaTexture.needsUpdate = true;
+                },
+                undefined, // onProgress callback (can be added for a loading bar)
+                (err) => { // Called if there's an error
+                    console.error('Error loading panorama texture:', err);
+                    alert('Could not load the panorama image. Please check the URL and make sure the image exists and is accessible.');
+                }
+            );
+
+            // 5. Panorama Sphere
+            const geometry = new THREE.SphereGeometry(500, 60, 40);
+            geometry.scale(-1, 1, 1); // Invert faces inward
+
+            const material = new THREE.MeshBasicMaterial({ map: panoramaTexture });
+            panoramaSphere = new THREE.Mesh(geometry, material);
+            scene.add(panoramaSphere);
+
+            // 6. Controls (OrbitControls for mouse and touch)
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableZoom = false;
+            controls.enablePan = false;
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.rotateSpeed = -0.25; // Negative for natural drag
+
+            // --- Enable initial automatic rotation ---
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = initialAutoRotateSpeed;
+
+            // --- Set a timeout to START the smooth falloff ---
+            setTimeout(() => {
+                isFallingOff = true;
+                falloffStartTime = performance.now(); // Record the time falloff begins
+                console.log("Starting auto-rotation falloff.");
+            }, INTRO_ROTATION_DURATION);
+
+            // 7. Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Start the animation loop
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+        }
+
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+
+            // --- Smooth Falloff Logic ---
+            if (isFallingOff) {
+                const elapsed = currentTime - falloffStartTime;
+                let progress = elapsed / FALLOFF_DURATION; // Calculate progress (0 to 1)
+                progress = Math.min(1, progress); // Cap progress at 1
+
+                // Use an easing function for a smoother deceleration (Ease Out Quad)
+                // Formula: 1 - (1 - t) * (1 - t)
+                const easedProgress = 1 - Math.pow(1 - progress, 2);
+
+                // Reduce autoRotateSpeed based on eased progress
+                controls.autoRotateSpeed = initialAutoRotateSpeed * (1 - easedProgress);
+
+                if (progress >= 1) { // If falloff is complete
+                    controls.autoRotate = false; // Stop auto-rotation completely
+                    isFallingOff = false;       // End falloff state
+                    controls.autoRotateSpeed = 0; // Ensure speed is zero
+                    console.log("Auto-rotation completely stopped with smooth falloff.");
+                }
+            }
+
+            // Update controls (important for auto-rotation and damping)
+            controls.update();
+
+            // Render the scene
+            renderer.render(scene, camera);
+
+            // Calculate and display FPS
+            currentTime = currentTime || 0;
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+            const currentFps = Math.round(1 / deltaTime);
+            if (isFinite(currentFps) && currentFps > 0) {
+                 fpsDiv.textContent = `FPS: ${currentFps}`;
+            }
+        }
+
+        // Start everything
+        init();
+    </script>
+</body>
+</html>
